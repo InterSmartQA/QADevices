@@ -19,6 +19,10 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" 
         crossorigin="anonymous">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Add Supabase client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" 
+          crossorigin="anonymous" 
+          onerror="handleScriptLoadError('Supabase')"></script>
   <style>
     :root {
       --primary: #1a4971;
@@ -468,6 +472,11 @@
   </div>
 
   <script>
+    // Initialize Supabase client with provided credentials
+    const SUPABASE_URL = 'https://ernyjuwgdzolruigqguv.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVybnlqdXdnZHpvbHJ1aWdxZ3V2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk1NDM0MjEsImV4cCI6MjA2NTExOTQyMX0.nji-Ibo_yF6EeOstUZxp3EQI7C0GNHWm3xwNDqN4c_I';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
     // Handle script load errors
     function handleScriptLoadError(scriptName) {
       console.error(`${scriptName} failed to load.`);
@@ -475,7 +484,7 @@
     }
 
     // Global variables
-    let allBookings = JSON.parse(localStorage.getItem('qaDeviceBookings')) || [];
+    let allBookings = [];
     const rowsPerPage = 10;
     let currentPage = 1;
     let timepickers = [];
@@ -573,13 +582,15 @@
     function calculateOverdueTime(booking) {
       if (booking.status === 'returned') return booking.overdue || '0 min';
       try {
-        const toTime = booking.toTime;
-        const bookingDate = booking.bookingDate;
+        const toTime = booking.to_time;
+        const bookingDate = booking.booking_date;
         const now = new Date();
-        now.setTime(now.getTime() + (5.5 * 60 * 60 * 1000)); // Adjust to IST
+        const currentIST = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+        const currentDateTime = new Date(currentIST);
         const endTime = new Date(`${bookingDate}T${toTime}:00+05:30`);
-        if (now <= endTime) return '0 min';
-        const diffMs = now - endTime;
+        
+        if (currentDateTime <= endTime) return '0 min';
+        const diffMs = currentDateTime - endTime;
         const minutes = Math.floor(diffMs / (1000 * 60));
         return `${minutes} min`;
       } catch (error) {
@@ -590,10 +601,10 @@
 
     // Calculate total time used
     function calculateTotalTimeUsed(booking) {
-      if (!booking.fromTime || !booking.endTime) return '-';
+      if (!booking.from_time || !booking.end_time) return '-';
       try {
-        const start = new Date(`${booking.bookingDate}T${booking.fromTime}:00+05:30`);
-        const end = new Date(`${booking.bookingDate}T${booking.endTime}:00+05:30`);
+        const start = new Date(`${booking.booking_date}T${booking.from_time}:00+05:30`);
+        const end = new Date(`${booking.booking_date}T${booking.end_time}:00+05:30`);
         const diffMs = end - start;
         const minutes = Math.floor(diffMs / (1000 * 60));
         return `${minutes} min`;
@@ -611,8 +622,23 @@
       });
     }
 
+    // Fetch all bookings from Supabase
+    async function fetchBookings() {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*')
+        .order('timestamp', { ascending: false });
+      if (error) {
+        console.error('Error fetching bookings:', error);
+        showError('Failed to load bookings. Please refresh the page.');
+        return [];
+      }
+      allBookings = data || [];
+      return allBookings;
+    }
+
     // Initialize app
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
       try {
         if (typeof window.flatpickr !== 'undefined') {
           const fromTime = document.getElementById('fromTime');
@@ -644,6 +670,9 @@
           showError('Time picker library failed to load. Enter time manually (HH:mm).');
         }
 
+        // Fetch initial bookings
+        await fetchBookings();
+
         checkAccessTime();
         setInterval(checkAccessTime, 60000); // Check every minute
         renderProductCards();
@@ -661,7 +690,7 @@
       if (!container) return;
       container.innerHTML = '';
       devices.forEach(device => {
-        const isBooked = allBookings.some(b => b.deviceId === device.id && b.status === 'booked' && b.bookingDate === getCurrentDate());
+        const isBooked = allBookings.some(b => b.device_id === device.id && b.status === 'booked' && b.booking_date === getCurrentDate());
         const card = document.createElement('div');
         card.className = 'product-card';
         card.innerHTML = `
@@ -719,7 +748,7 @@
     }
 
     // Book device
-    function bookDevice() {
+    async function bookDevice() {
       const qaAssignee = document.getElementById('qaAssignee')?.value;
       const projectName = document.getElementById('projectName')?.value;
       const fromTime = document.getElementById('fromTime')?.value;
@@ -755,24 +784,33 @@
       }
 
       const booking = {
-        bookingId: generateUUID(),
-        deviceId,
-        qaAssignee,
-        projectName,
-        bookingDate: getCurrentDate(),
-        fromTime,
-        toTime,
-        reason,
+        booking_id: generateUUID(),
+        device_id: deviceId,
+        qa_assignee: qaAssignee,
+        project_name: projectName,
+        booking_date: getCurrentDate(),
+        from_time: fromTime,
+        to_time: toTime,
+        reason: reason,
         status: 'booked',
-        startTime: getCurrentTime(),
-        endTime: null,
+        start_time: getCurrentTime(),
+        end_time: null,
         overdue: '0 min',
-        totalTimeUsed: null,
-        timestamp: new Date().toISOString()
+        total_time_used: null
       };
 
+      // Insert into Supabase
+      const { error } = await supabase
+        .from('bookings')
+        .insert([booking]);
+
+      if (error) {
+        console.error('Error booking device:', error);
+        showError('Failed to book device. Please try again.');
+        return;
+      }
+
       allBookings.push(booking);
-      localStorage.setItem('qaDeviceBookings', JSON.stringify(allBookings));
       alert('Device booked successfully!');
       resetBookingForm();
       document.getElementById('bookingForm').style.display = 'none';
@@ -790,10 +828,10 @@
       let filteredBookings = allBookings;
 
       if (filterQA) {
-        filteredBookings = filteredBookings.filter(b => b.qaAssignee === filterQA);
+        filteredBookings = filteredBookings.filter(b => b.qa_assignee === filterQA);
       }
       if (filterDevice) {
-        filteredBookings = filteredBookings.filter(b => b.deviceId === filterDevice);
+        filteredBookings = filteredBookings.filter(b => b.device_id === filterDevice);
       }
 
       tableBody.innerHTML = '';
@@ -808,17 +846,17 @@
           const overdue = calculateOverdueTime(booking);
           const totalTimeUsed = calculateTotalTimeUsed(booking);
           const row = document.createElement('tr');
-          row.setAttribute('data-bookingid', booking.bookingId);
+          row.setAttribute('data-bookingid', booking.booking_id);
           row.innerHTML = `
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${devices.find(d => d.id === booking.deviceId)?.name || ''}</td>
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.qaAssignee}</td>
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.projectName}</td>
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.bookingDate}</td>
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.fromTime}</td>
-            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.toTime}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${devices.find(d => d.id === booking.device_id)?.name || ''}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.qa_assignee}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.project_name}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.booking_date}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.from_time}</td>
+            <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.to_time}</td>
             <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">${booking.reason}</td>
             <td class="${overdue !== '0 min' && booking.status !== 'returned' ? 'overdue' : ''}">
-              <select class="status-select" ${booking.status === 'returned' ? 'disabled' : ''} onchange="updateBookingStatus('${booking.bookingId}', this.value)">
+              <select class="status-select" ${booking.status === 'returned' ? 'disabled' : ''} onchange="updateBookingStatus('${booking.booking_id}', this.value)">
                 <option value="booked" ${booking.status === 'booked' ? 'selected' : ''}>Booked</option>
                 <option value="returned" ${booking.status === 'returned' ? 'selected' : ''}>Returned</option>
               </select>
@@ -842,8 +880,8 @@
     }
 
     // Update booking status
-    function updateBookingStatus(bookingId, newStatus) {
-      const booking = allBookings.find(b => b.bookingId === bookingId);
+    async function updateBookingStatus(bookingId, newStatus) {
+      const booking = allBookings.find(b => b.booking_id === bookingId);
       if (!booking) {
         showError('Booking not found.');
         return;
@@ -851,22 +889,51 @@
 
       booking.status = newStatus;
       if (newStatus === 'returned') {
-        booking.endTime = getCurrentTime();
+        booking.end_time = getCurrentTime();
         booking.overdue = calculateOverdueTime(booking);
-        booking.totalTimeUsed = calculateTotalTimeUsed(booking);
+        booking.total_time_used = calculateTotalTimeUsed(booking);
       }
-      localStorage.setItem('qaDeviceBookings', JSON.stringify(allBookings));
+
+      // Update in Supabase
+      const { error } = await supabase
+        .from('bookings')
+        .update({
+          status: booking.status,
+          end_time: booking.end_time,
+          overdue: booking.overdue,
+          total_time_used: booking.total_time_used
+        })
+        .eq('booking_id', bookingId);
+
+      if (error) {
+        console.error('Error updating booking status:', error);
+        showError('Failed to update booking status. Please try again.');
+        return;
+      }
+
       renderProductCards();
       renderAssetTable();
     }
 
     // Delete booking
-    function deleteBooking(button) {
+    async function deleteBooking(button) {
       if (!confirm('Are you sure you want to delete this booking?')) return;
       const row = button.closest('tr');
       const bookingId = row.dataset.bookingid;
-      allBookings = allBookings.filter(b => b.bookingId !== bookingId);
-      localStorage.setItem('qaDeviceBookings', JSON.stringify(allBookings));
+
+      // Delete from Supabase
+      const { error } = await supabase
+        .from('bookings')
+        .delete()
+        .eq('booking_id', bookingId);
+
+      if (error) {
+        console.error('Error deleting booking:', error);
+        showError('Failed to delete booking. Please try again.');
+        return;
+      }
+
+      allBookings = allBookings.filter(b => b.booking_id !== bookingId);
       renderProductCards();
       renderAssetTable();
     }
@@ -934,19 +1001,19 @@
         let filteredBookings = allBookings;
 
         if (filterQA) {
-          filteredBookings = filteredBookings.filter(b => b.qaAssignee === filterQA);
+          filteredBookings = filteredBookings.filter(b => b.qa_assignee === filterQA);
         }
         if (filterDevice) {
-          filteredBookings = filteredBookings.filter(b => b.deviceId === filterDevice);
+          filteredBookings = filteredBookings.filter(b => b.device_id === filterDevice);
         }
 
         const data = filteredBookings.map(booking => ({
-          'Device': devices.find(d => d.id === booking.deviceId)?.name || '',
-          'QA Name': booking.qaAssignee || '',
-          'Project Name': booking.projectName || '',
-          'Booking Date': booking.bookingDate || '',
-          'From Time': booking.fromTime || '',
-          'To Time': booking.toTime || '',
+          'Device': devices.find(d => d.id === booking.device_id)?.name || '',
+          'QA Name': booking.qa_assignee || '',
+          'Project Name': booking.project_name || '',
+          'Booking Date': booking.booking_date || '',
+          'From Time': booking.from_time || '',
+          'To Time': booking.to_time || '',
           'Reason': booking.reason || '',
           'Status': booking.status || '',
           'Overdue': calculateOverdueTime(booking),
